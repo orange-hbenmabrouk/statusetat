@@ -6,9 +6,11 @@ import (
 )
 
 type Metadata struct {
+	ID           uint   `json:"id" gorm:"primary_key;auto_increment"`
 	IncidentGUID string `json:"incident_guid"`
 	Key          string `json:"key"`
 	Value        string `json:"value"`
+	IsDisplayed  bool   `json:"is_displayed,omitempty" gorm:"column:is_displayed"`
 }
 
 type InputTypeMetadata int

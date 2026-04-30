@@ -2,7 +2,8 @@
     text-overflow: ellipsis;
 }
 
-html, body {
+html,
+body {
     height: 100%;
     margin: 0;
     padding: 0;
@@ -37,7 +38,8 @@ hr {
     padding: 5px;
 }
 
-.material-icons, .icon-text {
+.material-icons,
+.icon-text {
     display: inline-flex;
     vertical-align: top;
 }
@@ -160,7 +162,7 @@ time.human {
     cursor: help;
 }
 
-.sidenav li > a {
+.sidenav li>a {
     color: white;
 }
 
@@ -191,8 +193,8 @@ time.human {
     margin-top: 0;
 }
 
-.admin-container [type="radio"]:checked + span,
-.admin-container [type="radio"]:not(:checked) + span {
+.admin-container [type="radio"]:checked+span,
+.admin-container [type="radio"]:not(:checked)+span {
     padding-left: 25px;
     margin-right: 10px;
 }
@@ -208,8 +210,8 @@ time.human {
 
 .markdown ul,
 .markdown ol,
-.markdown ul > li,
-.markdown ol > li {
+.markdown ul>li,
+.markdown ol>li {
     list-style: initial;
 }
 
@@ -241,7 +243,8 @@ time.human {
     position: initial !important;
 }
 
-.details-date {
+.details-date,
+.details-metadata {
     font-size: .7rem;
 }
 
@@ -254,15 +257,15 @@ time.human {
     list-style-type: initial;
 }
 
-.incident-main-message ul > li {
+.incident-main-message ul>li {
     list-style-type: disc;
 }
 
-.incident-main-message ul ul > li {
+.incident-main-message ul ul>li {
     list-style-type: circle;
 }
 
-.incident-main-message ul ul ul > li {
+.incident-main-message ul ul ul>li {
     list-style-type: square;
 }
 
@@ -562,7 +565,7 @@ time.human {
     appearance: none;
 }
 
-.incident-main-message :checked + .radio-label {
+.incident-main-message :checked+.radio-label {
     position: relative;
     z-index: 1;
     border-color: #0366d6;
@@ -885,11 +888,11 @@ time.human {
     clear: both;
 }
 
-.incident-main-message > :first-child {
+.incident-main-message> :first-child {
     margin-top: 0 !important;
 }
 
-.incident-main-message > :last-child {
+.incident-main-message> :last-child {
     margin-bottom: 0 !important;
 }
 
@@ -924,11 +927,11 @@ time.human {
     border-left: .25em solid #dfe2e5;
 }
 
-.incident-main-message blockquote > :first-child {
+.incident-main-message blockquote> :first-child {
     margin-top: 0;
 }
 
-.incident-main-message blockquote > :last-child {
+.incident-main-message blockquote> :last-child {
     margin-bottom: 0;
 }
 
@@ -992,11 +995,11 @@ time.human {
     word-wrap: break-all;
 }
 
-.incident-main-message li > p {
+.incident-main-message li>p {
     margin-top: 16px;
 }
 
-.incident-main-message li + li {
+.incident-main-message li+li {
     margin-top: .25em;
 }
 
@@ -1068,7 +1071,7 @@ time.human {
     word-wrap: normal;
 }
 
-.incident-main-message pre > code {
+.incident-main-message pre>code {
     padding: 0;
     margin: 0;
     font-size: 100%;
@@ -1245,7 +1248,7 @@ time.human {
     list-style-type: none;
 }
 
-.incident-main-message .task-list-item + .task-list-item {
+.incident-main-message .task-list-item+.task-list-item {
     margin-top: 3px;
 }
 
@@ -1306,7 +1309,7 @@ time.human {
     padding: revert;
 }
 
-.alert-box .content ul > li {
+.alert-box .content ul>li {
     list-style-type: initial;
 }
 

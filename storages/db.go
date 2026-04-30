@@ -90,6 +90,14 @@ func (s *DB) Create(incident models.Incident) (models.Incident, error) {
 			return incident, err
 		}
 	}
+	for i, meta := range incident.Metadata {
+		meta.IncidentGUID = incident.GUID
+		err := s.db.Create(&meta).Error
+		if err != nil {
+			return incident, err
+		}
+		incident.Metadata[i] = meta
+	}
 	err := s.db.Create(&incident).Error
 	return incident, err
 }
@@ -129,6 +137,9 @@ func (s *DB) Update(guid string, incident models.Incident) (models.Incident, err
 		return incident, err
 	}
 	err = s.db.Where("incident_guid = ?", guid).Delete(models.Metadata{}).Error
+	if err != nil {
+		return incident, err
+	}
 	for i, msg := range incident.Messages {
 		err := s.db.Create(&msg).Error
 		if err != nil {
@@ -136,8 +147,13 @@ func (s *DB) Update(guid string, incident models.Incident) (models.Incident, err
 		}
 		incident.Messages[i] = msg
 	}
-	if err != nil {
-		return incident, err
+	for i, meta := range incident.Metadata {
+		meta.IncidentGUID = guid
+		err := s.db.Create(&meta).Error
+		if err != nil {
+			return incident, err
+		}
+		incident.Metadata[i] = meta
 	}
 	incident.GUID = guid
 	var updatedIncident models.Incident
