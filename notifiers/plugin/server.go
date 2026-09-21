@@ -60,15 +60,17 @@ func (s *GRPCServer) Id(ctx context.Context, request *emptypb.Empty) (*proto.IdR
 }
 
 func (s *GRPCServer) Notify(ctx context.Context, request *proto.NotifyRequest) (*proto.ErrorResponse, error) {
-	err := s.Impl.Notify(ProtoToNotifyRequest(request))
+	notifyRequest := ProtoToNotifyRequest(request)
+	err := s.Impl.Notify(notifyRequest)
 	if err != nil {
 		return &proto.ErrorResponse{
 			Error: &proto.Error{
 				Detail: err.Error(),
 			},
+			Incident: IncidentToProto(notifyRequest.Incident),
 		}, nil
 	}
-	return &proto.ErrorResponse{}, nil
+	return &proto.ErrorResponse{Incident: IncidentToProto(notifyRequest.Incident)}, nil
 }
 
 func (s *GRPCServer) MetadataFields(ctx context.Context, request *emptypb.Empty) (*proto.ListMetadataField, error) {
@@ -123,7 +125,8 @@ func (s *GRPCServer) PreCheck(ctx context.Context, request *proto.NotifyRequest)
 			Error: &proto.Error{
 				Detail: err.Error(),
 			},
+			Incident: IncidentToProto(protoToIncident),
 		}, nil
 	}
-	return &proto.ErrorResponse{}, nil
+	return &proto.ErrorResponse{Incident: IncidentToProto(protoToIncident)}, nil
 }

@@ -7,7 +7,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/orange-cloudfoundry/statusetat/v2/common"
 	"github.com/orange-cloudfoundry/statusetat/v2/models"
 	"github.com/orange-cloudfoundry/statusetat/v2/notifiers/plugin/proto"
 )
@@ -21,7 +20,7 @@ func IncidentToProto(incident models.Incident) *proto.Incident {
 		ComponentState: proto.Incident_ComponentState(incident.ComponentState),
 		Components:     componentsToProto(incident.Components),
 		Messages:       messagesToProto(incident.Messages),
-		Metadata:       metadataToMap(incident.Metadata),
+		Metadata:       metadataToProto(incident.Metadata),
 		IsScheduled:    incident.IsScheduled,
 		ScheduledEnd:   timeToLocalizedTime(incident.ScheduledEnd),
 		Origin:         incident.Origin,
@@ -37,7 +36,7 @@ func ProtoToIncident(incident *proto.Incident) models.Incident {
 		ComponentState: models.ComponentState(incident.GetComponentState()),
 		Components:     protoToComponents(incident.GetComponents()),
 		Messages:       protoToMessages(incident.GetMessages()),
-		Metadata:       mapToMetadata(incident.GetMetadata()),
+		Metadata:       protoToMetadata(incident.GetMetadata()),
 		IsScheduled:    incident.GetIsScheduled(),
 		ScheduledEnd:   localizedTimeToTime(incident.GetScheduledEnd()),
 		Origin:         incident.GetOrigin(),
@@ -79,21 +78,27 @@ func localizedTimeToTime(t *proto.LocalizedTime) time.Time {
 	return newTime
 }
 
-func metadataToMap(metadata []models.Metadata) map[string]string {
-	return common.MetadataToMap(metadata)
+func metadataToProto(metadata []models.Metadata) []*proto.MetadataEntry {
+	entries := make([]*proto.MetadataEntry, len(metadata))
+	for i, m := range metadata {
+		entries[i] = &proto.MetadataEntry{
+			Key:         m.Key,
+			Value:       m.Value,
+			IsDisplayed: m.IsDisplayed,
+		}
+	}
+	return entries
 }
 
-func mapToMetadata(metadata map[string]string) []models.Metadata {
+func protoToMetadata(metadata []*proto.MetadataEntry) []models.Metadata {
 	metadataList := make([]models.Metadata, len(metadata))
-	i := 0
-	for k, v := range metadata {
+	for i, m := range metadata {
 		metadataList[i] = models.Metadata{
-			Key:   k,
-			Value: v,
+			Key:         m.GetKey(),
+			Value:       m.GetValue(),
+			IsDisplayed: m.GetIsDisplayed(),
 		}
-		i++
 	}
-
 	return metadataList
 }
 

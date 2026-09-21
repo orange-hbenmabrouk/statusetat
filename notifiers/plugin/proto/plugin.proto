@@ -29,10 +29,16 @@ message Incident {
   ComponentState component_state = 5;
   repeated Component components = 6;
   repeated Message messages = 7;
-  map<string, string> metadata = 8;
+  repeated MetadataEntry metadata = 8;
   bool is_scheduled = 9;
   LocalizedTime scheduled_end = 10;
   string origin = 11;
+}
+
+message MetadataEntry {
+  string key = 1;
+  string value = 2;
+  bool is_displayed = 3;
 }
 
 message Message {
@@ -108,6 +114,8 @@ message NotifyRequest {
 
 message ErrorResponse {
   Error error = 1;
+  // Incident as possibly mutated by the notifier, echoed back so the caller can persist changes
+  Incident incident = 2;
 }
 
 message NameResponse {

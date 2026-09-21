@@ -106,6 +106,10 @@ func (m *GRPCClient) PreCheck(incident *models.Incident) error {
 	if err != nil {
 		return err
 	}
+	// Apply back whatever the plugin mutated on the incident (e.g. metadata) so the caller can persist it
+	if resp.GetIncident() != nil {
+		*incident = ProtoToIncident(resp.GetIncident())
+	}
 	if resp.GetError() != nil {
 		return fmt.Errorf("%s", resp.GetError().GetDetail())
 	}
