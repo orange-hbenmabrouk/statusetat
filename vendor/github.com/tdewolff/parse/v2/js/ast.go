@@ -22,14 +22,14 @@ type AST struct {
 }
 
 func (ast AST) String() string {
-	s := ""
+	var s strings.Builder
 	for i, item := range ast.BlockStmt.List {
 		if i != 0 {
-			s += " "
+			s.WriteString(" ")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
-	return s
+	return s.String()
 }
 
 // JS writes JavaScript to writer.
@@ -91,10 +91,10 @@ type DeclType uint16
 const (
 	NoDecl       DeclType = iota // undeclared variables
 	VariableDecl                 // var
+	PrivateDecl                  // private class field
 	FunctionDecl                 // function
 	ArgumentDecl                 // function and method arguments
 	LexicalDecl                  // let, const, class
-	PrivateDecl                  // private class field
 	CatchDecl                    // catch statement argument
 	ExprDecl                     // function expression name or class expression name
 )
@@ -105,14 +105,14 @@ func (decl DeclType) String() string {
 		return "NoDecl"
 	case VariableDecl:
 		return "VariableDecl"
+	case PrivateDecl:
+		return "PrivateDecl"
 	case FunctionDecl:
 		return "FunctionDecl"
 	case ArgumentDecl:
 		return "ArgumentDecl"
 	case LexicalDecl:
 		return "LexicalDecl"
-	case PrivateDecl:
-		return "PrivateDecl"
 	case CatchDecl:
 		return "CatchDecl"
 	case ExprDecl:
@@ -180,19 +180,20 @@ func (vs VarsByUses) Less(i, j int) bool {
 type VarArray []*Var
 
 func (vs VarArray) String() string {
-	s := "["
+	var s strings.Builder
+	s.WriteString("[")
 	for i, v := range vs {
 		if i != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
 		links := 0
 		for v.Link != nil {
 			v = v.Link
 			links++
 		}
-		s += fmt.Sprintf("Var{%v %s %v %v}", v.Decl, string(v.Data), links, v.Uses)
+		s.WriteString(fmt.Sprintf("Var{%v %s %v %v}", v.Decl, string(v.Data), links, v.Uses))
 	}
-	return s + "]"
+	return s.String() + "]"
 }
 
 // Scope is a function or block scope with a list of variables declared and used.
@@ -231,7 +232,7 @@ func (s *Scope) Declare(decl DeclType, name []byte) (*Var, bool) {
 	if v := s.findDeclared(name, true); v != nil {
 		// variable already declared, might be an error or a duplicate declaration
 		if (ArgumentDecl < v.Decl || FunctionDecl < decl) && v.Decl != ExprDecl {
-			// only allow (v.Decl,decl) of: (var|function|argument,var|function), (expr,*), any other combination is a syntax error
+			// only allow (v.Decl,decl) of: (var|private|function|argument,var|private|function), (expr,*), any other combination is a syntax error
 			return nil, false
 		}
 		if v.Decl == ExprDecl {
@@ -454,11 +455,12 @@ type BlockStmt struct {
 }
 
 func (n BlockStmt) String() string {
-	s := "Stmt({"
+	var s strings.Builder
+	s.WriteString("Stmt({")
 	for _, item := range n.List {
-		s += " " + item.String()
+		s.WriteString(" " + item.String())
 	}
-	return s + " })"
+	return s.String() + " })"
 }
 
 // JS writes JavaScript to writer.
@@ -724,14 +726,15 @@ type CaseClause struct {
 }
 
 func (n CaseClause) String() string {
-	s := " Clause(" + n.TokenType.String()
+	var s strings.Builder
+	s.WriteString(" Clause(" + n.TokenType.String())
 	if n.Cond != nil {
-		s += " " + n.Cond.String()
+		s.WriteString(" " + n.Cond.String())
 	}
 	for _, item := range n.List {
-		s += " " + item.String()
+		s.WriteString(" " + item.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -761,11 +764,12 @@ type SwitchStmt struct {
 }
 
 func (n SwitchStmt) String() string {
-	s := "Stmt(switch " + n.Init.String()
+	var s strings.Builder
+	s.WriteString("Stmt(switch " + n.Init.String())
 	for _, clause := range n.List {
-		s += clause.String()
+		s.WriteString(clause.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -980,31 +984,32 @@ type ImportStmt struct {
 }
 
 func (n ImportStmt) String() string {
-	s := "Stmt(import"
+	var s strings.Builder
+	s.WriteString("Stmt(import")
 	if n.Default != nil {
-		s += " " + string(n.Default)
+		s.WriteString(" " + string(n.Default))
 		if n.List != nil {
-			s += " ,"
+			s.WriteString(" ,")
 		}
 	}
 	if len(n.List) == 1 && len(n.List[0].Name) == 1 && n.List[0].Name[0] == '*' {
-		s += " " + n.List[0].String()
+		s.WriteString(" " + n.List[0].String())
 	} else if n.List != nil {
-		s += " {"
+		s.WriteString(" {")
 		for i, item := range n.List {
 			if i != 0 {
-				s += " ,"
+				s.WriteString(" ,")
 			}
 			if item.Binding != nil {
-				s += " " + item.String()
+				s.WriteString(" " + item.String())
 			}
 		}
-		s += " }"
+		s.WriteString(" }")
 	}
 	if n.Default != nil || n.List != nil {
-		s += " from"
+		s.WriteString(" from")
 	}
-	return s + " " + string(n.Module) + ")"
+	return s.String() + " " + string(n.Module) + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -1217,22 +1222,23 @@ type BindingArray struct {
 }
 
 func (n BindingArray) String() string {
-	s := "["
+	var s strings.Builder
+	s.WriteString("[")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ","
+			s.WriteString(",")
 		}
-		s += " " + item.String()
+		s.WriteString(" " + item.String())
 	}
 	if n.Rest != nil {
 		if len(n.List) != 0 {
-			s += ","
+			s.WriteString(",")
 		}
-		s += " ...Binding(" + n.Rest.String() + ")"
+		s.WriteString(" ...Binding(" + n.Rest.String() + ")")
 	} else if 0 < len(n.List) && n.List[len(n.List)-1].Binding == nil {
-		s += ","
+		s.WriteString(",")
 	}
-	return s + " ]"
+	return s.String() + " ]"
 }
 
 // JS writes JavaScript to writer.
@@ -1295,20 +1301,21 @@ type BindingObject struct {
 }
 
 func (n BindingObject) String() string {
-	s := "{"
+	var s strings.Builder
+	s.WriteString("{")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ","
+			s.WriteString(",")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
 	if n.Rest != nil {
 		if len(n.List) != 0 {
-			s += ","
+			s.WriteString(",")
 		}
-		s += " ...Binding(" + string(n.Rest.Data) + ")"
+		s.WriteString(" ...Binding(" + string(n.Rest.Data) + ")")
 	}
-	return s + " }"
+	return s.String() + " }"
 }
 
 // JS writes JavaScript to writer.
@@ -1375,11 +1382,12 @@ type VarDecl struct {
 }
 
 func (n VarDecl) String() string {
-	s := "Decl(" + n.TokenType.String()
+	var s strings.Builder
+	s.WriteString("Decl(" + n.TokenType.String())
 	for _, item := range n.List {
-		s += " " + item.String()
+		s.WriteString(" " + item.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -1401,20 +1409,21 @@ type Params struct {
 }
 
 func (n Params) String() string {
-	s := "Params("
+	var s strings.Builder
+	s.WriteString("Params(")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
 	if n.Rest != nil {
 		if len(n.List) != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += "...Binding(" + n.Rest.String() + ")"
+		s.WriteString("...Binding(" + n.Rest.String() + ")")
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -1586,7 +1595,7 @@ func (n MethodDecl) JS(w io.Writer) {
 type Field struct {
 	Static bool
 	Name   ClassElementName
-	Init   IExpr
+	Init   IExpr // can be nil
 }
 
 func (n Field) String() string {
@@ -1652,17 +1661,18 @@ type ClassDecl struct {
 }
 
 func (n ClassDecl) String() string {
-	s := "Decl(class"
+	var s strings.Builder
+	s.WriteString("Decl(class")
 	if n.Name != nil {
-		s += " " + string(n.Name.Data)
+		s.WriteString(" " + string(n.Name.Data))
 	}
 	if n.Extends != nil {
-		s += " extends " + n.Extends.String()
+		s.WriteString(" extends " + n.Extends.String())
 	}
 	for _, item := range n.List {
-		s += " " + item.String()
+		s.WriteString(" " + item.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -1776,22 +1786,23 @@ type ArrayExpr struct {
 }
 
 func (n ArrayExpr) String() string {
-	s := "["
+	var s strings.Builder
+	s.WriteString("[")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
 		if item.Value != nil {
 			if item.Spread {
-				s += "..."
+				s.WriteString("...")
 			}
-			s += item.Value.String()
+			s.WriteString(item.Value.String())
 		}
 	}
 	if 0 < len(n.List) && n.List[len(n.List)-1].Value == nil {
-		s += ","
+		s.WriteString(",")
 	}
-	return s + "]"
+	return s.String() + "]"
 }
 
 // JS writes JavaScript to writer.
@@ -1844,7 +1855,7 @@ type Property struct {
 	// if Init is set then Value is IdentifierReference, otherwise it can also be MethodDefinition
 	Name   *PropertyName // can be nil
 	Spread bool
-	Value  IExpr
+	Value  IExpr // Var, MethodDecl, AssignExpr, or IdentExpr
 	Init   IExpr // can be nil
 }
 
@@ -1916,14 +1927,15 @@ type ObjectExpr struct {
 }
 
 func (n ObjectExpr) String() string {
-	s := "{"
+	var s strings.Builder
+	s.WriteString("{")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
-	return s + "}"
+	return s.String() + "}"
 }
 
 // JS writes JavaScript to writer.
@@ -1979,17 +1991,17 @@ type TemplateExpr struct {
 }
 
 func (n TemplateExpr) String() string {
-	s := ""
+	var s strings.Builder
 	if n.Tag != nil {
-		s += n.Tag.String()
+		s.WriteString(n.Tag.String())
 		if n.Optional {
-			s += "?."
+			s.WriteString("?.")
 		}
 	}
 	for _, item := range n.List {
-		s += item.String()
+		s.WriteString(item.String())
 	}
-	return s + string(n.Tail)
+	return s.String() + string(n.Tail)
 }
 
 // JS writes JavaScript to writer.
@@ -2161,14 +2173,15 @@ type Args struct {
 }
 
 func (n Args) String() string {
-	s := "("
+	var s strings.Builder
+	s.WriteString("(")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.
@@ -2211,6 +2224,7 @@ func (n NewExpr) JS(w io.Writer) {
 type CallExpr struct {
 	X        IExpr
 	Args     Args
+	Prec     OpPrec
 	Optional bool
 }
 
@@ -2384,14 +2398,15 @@ type CommaExpr struct {
 }
 
 func (n CommaExpr) String() string {
-	s := "("
+	var s strings.Builder
+	s.WriteString("(")
 	for i, item := range n.List {
 		if i != 0 {
-			s += ","
+			s.WriteString(",")
 		}
-		s += item.String()
+		s.WriteString(item.String())
 	}
-	return s + ")"
+	return s.String() + ")"
 }
 
 // JS writes JavaScript to writer.

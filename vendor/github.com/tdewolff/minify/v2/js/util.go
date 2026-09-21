@@ -3,6 +3,7 @@ package js
 import (
 	"bytes"
 	"encoding/hex"
+	"slices"
 	stdStrconv "strconv"
 	"unicode/utf8"
 
@@ -339,7 +340,7 @@ func exprPrec(i js.IExpr) js.OpPrec {
 	case *js.NewTargetExpr, *js.ImportMetaExpr:
 		return js.OpMember
 	case *js.CallExpr:
-		return js.OpCall
+		return expr.Prec
 	case *js.CondExpr, *js.YieldExpr, *js.ArrowFunc:
 		return js.OpAssign
 	case *js.GroupExpr:
@@ -366,10 +367,8 @@ func hasSideEffects(i js.IExpr) bool {
 	case *js.CondExpr:
 		return hasSideEffects(expr.Cond) || hasSideEffects(expr.X) || hasSideEffects(expr.Y)
 	case *js.CommaExpr:
-		for _, item := range expr.List {
-			if hasSideEffects(item) {
-				return true
-			}
+		if slices.ContainsFunc(expr.List, hasSideEffects) {
+			return true
 		}
 	case *js.ArrayExpr:
 		for _, item := range expr.List {
@@ -843,7 +842,7 @@ func (m *jsMinifier) optimizeCondExpr(expr *js.CondExpr, prec js.OpPrec) js.IExp
 		if isCallX && isCallY && len(callX.Args.List) == 1 && len(callY.Args.List) == 1 && !callX.Args.List[0].Rest && !callY.Args.List[0].Rest && isEqualExpr(callX.X, callY.X) {
 			expr.X = callX.Args.List[0].Value
 			expr.Y = callY.Args.List[0].Value
-			return &js.CallExpr{callX.X, js.Args{[]js.Arg{{expr, false}}}, false} // recompress the conditional expression inside
+			return &js.CallExpr{callX.X, js.Args{[]js.Arg{{expr, false}}}, js.OpCall, false} // recompress the conditional expression inside
 		}
 
 		// shorten when true and false bodies are true and false

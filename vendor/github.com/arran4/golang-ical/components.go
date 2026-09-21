@@ -30,8 +30,9 @@ var (
 )
 
 type ComponentBase struct {
-	Properties []IANAProperty
-	Components []Component
+	Properties     []IANAProperty
+	Components     []Component
+	timezoneMapper TimezoneMapper
 }
 
 func (cb *ComponentBase) UnknownPropertiesIANAProperties() []IANAProperty {
@@ -42,10 +43,48 @@ func (cb *ComponentBase) SubComponents() []Component {
 	return cb.Components
 }
 
+type timezoneMapperSetter interface {
+	setTimezoneMapper(TimezoneMapper)
+}
+
+type timezoneMapperGetter interface {
+	getTimezoneMapper() TimezoneMapper
+}
+
+func (cb *ComponentBase) setTimezoneMapper(mapper TimezoneMapper) {
+	cb.timezoneMapper = mapper
+	if mapper == nil {
+		return
+	}
+	for _, child := range cb.Components {
+		if setter, ok := child.(timezoneMapperSetter); ok {
+			setter.setTimezoneMapper(mapper)
+		}
+	}
+}
+
+func (cb *ComponentBase) getTimezoneMapper() TimezoneMapper {
+	return cb.timezoneMapper
+}
+
+func (cb *ComponentBase) addComponent(c Component) {
+	if c == nil {
+		return
+	}
+	if cb.timezoneMapper != nil {
+		if setter, ok := c.(timezoneMapperSetter); ok {
+			if getter, ok := c.(timezoneMapperGetter); !ok || getter.getTimezoneMapper() == nil {
+				setter.setTimezoneMapper(cb.timezoneMapper)
+			}
+		}
+	}
+	cb.Components = append(cb.Components, c)
+}
+
 func (cb *ComponentBase) serializeThis(writer io.Writer, componentType ComponentType, serialConfig *SerializationConfiguration) error {
 	_, _ = io.WriteString(writer, "BEGIN:"+string(componentType)+serialConfig.NewLine)
 	for _, p := range cb.Properties {
-		err := p.serialize(writer, serialConfig)
+		err := p.SerializeTo(writer, serialConfig)
 		if err != nil {
 			return err
 		}
@@ -276,27 +315,35 @@ func (cb *ComponentBase) GetEndAt() (time.Time, error) {
 func (cb *ComponentBase) getTimeProp(componentProperty ComponentProperty, expectAllDay bool) (time.Time, error) {
 	timeProp := cb.GetProperty(componentProperty)
 	if timeProp == nil {
-		return time.Time{}, fmt.Errorf("%w: %s", ErrorPropertyNotFound, componentProperty)
+		return time.Time{}, fmt.Errorf("%w: %s", ErrPropertyNotFound, componentProperty)
 	}
 
-	timeVal := timeProp.BaseProperty.Value
+	if cb.timezoneMapper != nil {
+		return parseTimeValue(timeProp.BaseProperty.Value, timeProp.ICalParameters, expectAllDay, cb.timezoneMapper)
+	}
+	return parseTimeValue(timeProp.BaseProperty.Value, timeProp.ICalParameters, expectAllDay)
+}
+
+// parseTimeValue parses a single iCal time value string with the given parameters.
+// This is the core time parsing logic shared by getTimeProp and multi-value time getters.
+func parseTimeValue(timeVal string, params map[string][]string, expectAllDay bool, ops ...any) (time.Time, error) {
 	matched := timeStampVariations.FindStringSubmatch(timeVal)
 	if matched == nil {
-		return time.Time{}, fmt.Errorf("time value not matched, got '%s'", timeVal)
+		return time.Time{}, fmt.Errorf("%w, got '%s'", ErrTimeValueNotMatched, timeVal)
 	}
 	tOrZGrp := matched[2]
 	zGrp := matched[4]
 	grp1len := len(matched[1])
 	grp3len := len(matched[3])
 
-	tzId, tzIdOk := timeProp.ICalParameters["TZID"]
+	tzId, tzIdOk := params["TZID"]
 	var propLoc *time.Location
 	if tzIdOk {
 		if len(tzId) != 1 {
-			return time.Time{}, errors.New("expected only one TZID")
+			return time.Time{}, ErrExpectedOneTZID
 		}
 		var tzErr error
-		propLoc, tzErr = time.LoadLocation(tzId[0])
+		propLoc, tzErr = resolveTimezone(tzId[0], ops...)
 		if tzErr != nil {
 			return time.Time{}, tzErr
 		}
@@ -316,7 +363,7 @@ func (cb *ComponentBase) getTimeProp(componentProperty ComponentProperty, expect
 			}
 		}
 
-		return time.Time{}, fmt.Errorf("time value matched but unsupported all-day timestamp, got '%s'", timeVal)
+		return time.Time{}, fmt.Errorf("%w, got '%s'", ErrTimeValueMatchedButUnsupportedAllDayTimeStamp, timeVal)
 	}
 
 	switch {
@@ -338,7 +385,7 @@ func (cb *ComponentBase) getTimeProp(componentProperty ComponentProperty, expect
 		}
 	}
 
-	return time.Time{}, fmt.Errorf("time value matched but not supported, got '%s'", timeVal)
+	return time.Time{}, fmt.Errorf("%w, got '%s'", ErrTimeValueMatchedButNotSupported, timeVal)
 }
 
 func (cb *ComponentBase) GetStartAt() (time.Time, error) {
@@ -355,6 +402,86 @@ func (cb *ComponentBase) GetLastModifiedAt() (time.Time, error) {
 
 func (cb *ComponentBase) GetDtStampTime() (time.Time, error) {
 	return cb.getTimeProp(ComponentPropertyDtstamp, false)
+}
+
+// GetRRules returns all RRULE properties parsed into RecurrenceRule structs.
+func (cb *ComponentBase) GetRRules() ([]*RecurrenceRule, error) {
+	return cb.getRecurrenceRules(ComponentPropertyRrule)
+}
+
+// GetExRules returns all EXRULE properties parsed into RecurrenceRule structs.
+func (cb *ComponentBase) GetExRules() ([]*RecurrenceRule, error) {
+	return cb.getRecurrenceRules(ComponentPropertyExrule)
+}
+
+func (cb *ComponentBase) getRecurrenceRules(prop ComponentProperty) ([]*RecurrenceRule, error) {
+	props := cb.GetProperties(prop)
+	if len(props) == 0 {
+		return nil, nil
+	}
+	rules := make([]*RecurrenceRule, 0, len(props))
+	for _, p := range props {
+		r, err := ParseRecurrenceRule(p.Value)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", prop, err)
+		}
+		rules = append(rules, r)
+	}
+	return rules, nil
+}
+
+// GetRDates returns all RDATE times, handling both comma-separated values
+// within a single property and multiple RDATE properties.
+func (cb *ComponentBase) GetRDates() ([]time.Time, error) {
+	return cb.getMultiTimeProp(ComponentPropertyRdate)
+}
+
+// GetExDates returns all EXDATE times, handling both comma-separated values
+// within a single property and multiple EXDATE properties.
+func (cb *ComponentBase) GetExDates() ([]time.Time, error) {
+	return cb.getMultiTimeProp(ComponentPropertyExdate)
+}
+
+// GetRecurrenceID returns the RECURRENCE-ID property as a time.Time.
+func (cb *ComponentBase) GetRecurrenceID() (time.Time, error) {
+	return cb.getTimeProp(ComponentPropertyRecurrenceId, false)
+}
+
+func (cb *ComponentBase) getMultiTimeProp(prop ComponentProperty) ([]time.Time, error) {
+	props := cb.GetProperties(prop)
+	if len(props) == 0 {
+		return nil, nil
+	}
+	var times []time.Time
+	for _, p := range props {
+		values := strings.Split(p.Value, ",")
+		// Check if VALUE=DATE is explicitly set in parameters
+		isDateOnly := false
+		if vals, ok := p.ICalParameters["VALUE"]; ok {
+			for _, val := range vals {
+				if val == "DATE" {
+					isDateOnly = true
+					break
+				}
+			}
+		}
+		for _, v := range values {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			var ops []any
+			if cb.timezoneMapper != nil {
+				ops = append(ops, cb.timezoneMapper)
+			}
+			t, err := parseTimeValue(v, p.ICalParameters, isDateOnly, ops...)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %s value %q: %w", prop, v, err)
+			}
+			times = append(times, t)
+		}
+	}
+	return times, nil
 }
 
 func (cb *ComponentBase) SetSummary(s string, params ...PropertyParameter) {
@@ -375,6 +502,18 @@ func (cb *ComponentBase) SetLocation(s string, params ...PropertyParameter) {
 
 func (cb *ComponentBase) setGeo(lat interface{}, lng interface{}, params ...PropertyParameter) {
 	cb.SetProperty(ComponentPropertyGeo, fmt.Sprintf("%v;%v", lat, lng), params...)
+}
+
+type GeoType interface {
+	~float32 | ~float64 | ~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~string
+}
+
+type SetPropertyOwner interface {
+	SetProperty(property ComponentProperty, value string, params ...PropertyParameter)
+}
+
+func SetGeo[T GeoType](c SetPropertyOwner, lat T, lng T, params ...PropertyParameter) {
+	c.SetProperty(ComponentPropertyGeo, fmt.Sprintf("%v;%v", lat, lng), params...)
 }
 
 func (cb *ComponentBase) SetURL(s string, params ...PropertyParameter) {
@@ -505,13 +644,16 @@ func (cb *ComponentBase) Id() string {
 
 func (cb *ComponentBase) addAlarm() *VAlarm {
 	a := &VAlarm{
-		ComponentBase: ComponentBase{},
+		ComponentBase: ComponentBase{timezoneMapper: cb.timezoneMapper},
 	}
 	cb.Components = append(cb.Components, a)
 	return a
 }
 
 func (cb *ComponentBase) addVAlarm(a *VAlarm) {
+	if a != nil && cb.timezoneMapper != nil {
+		a.setTimezoneMapper(cb.timezoneMapper)
+	}
 	cb.Components = append(cb.Components, a)
 }
 
@@ -560,7 +702,7 @@ func (event *VEvent) SetLastModifiedAt(t time.Time, props ...PropertyParameter) 
 	event.SetProperty(ComponentPropertyLastModified, t.UTC().Format(icalTimestampFormatUtc), props...)
 }
 
-// TODO use generics
+// SetGeo sets the geo property
 func (event *VEvent) SetGeo(lat interface{}, lng interface{}, params ...PropertyParameter) {
 	event.setGeo(lat, lng, params...)
 }
@@ -631,12 +773,12 @@ func NewTodo(uniqueId string) *VTodo {
 
 func (cal *Calendar) AddTodo(id string) *VTodo {
 	e := NewTodo(id)
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 	return e
 }
 
 func (cal *Calendar) AddVTodo(e *VTodo) {
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 }
 
 func (cal *Calendar) Todos() []*VTodo {
@@ -672,6 +814,7 @@ func (todo *VTodo) SetPercentComplete(p int, params ...PropertyParameter) {
 	todo.SetProperty(ComponentPropertyPercentComplete, strconv.Itoa(p), params...)
 }
 
+// SetGeo sets the geo property
 func (todo *VTodo) SetGeo(lat interface{}, lng interface{}, params ...PropertyParameter) {
 	todo.setGeo(lat, lng, params...)
 }
@@ -716,11 +859,12 @@ func (todo *VTodo) Alarms() []*VAlarm {
 	return todo.alarms()
 }
 
+// TODO verify that due is only relevant to VTodo if not move to ComponentBase.
 func (todo *VTodo) GetDueAt() (time.Time, error) {
 	return todo.getTimeProp(ComponentPropertyDue, false)
 }
 
-func (todo *VTodo) GetAllDayDueAt() (time.Time, error) {
+func (todo *VEvent) GetAllDayDueAt() (time.Time, error) {
 	return todo.getTimeProp(ComponentPropertyDue, true)
 }
 
@@ -755,12 +899,12 @@ func NewJournal(uniqueId string) *VJournal {
 
 func (cal *Calendar) AddJournal(id string) *VJournal {
 	e := NewJournal(id)
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 	return e
 }
 
 func (cal *Calendar) AddVJournal(e *VJournal) {
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 }
 
 func (cal *Calendar) Journals() []*VJournal {
@@ -805,12 +949,12 @@ func NewBusy(uniqueId string) *VBusy {
 
 func (cal *Calendar) AddBusy(id string) *VBusy {
 	e := NewBusy(id)
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 	return e
 }
 
 func (cal *Calendar) AddVBusy(e *VBusy) {
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 }
 
 func (cal *Calendar) Busys() []*VBusy {
@@ -848,7 +992,7 @@ func (timezone *VTimezone) SerializeTo(w io.Writer, serialConfig *SerializationC
 
 func (timezone *VTimezone) AddStandard() *Standard {
 	e := NewStandard()
-	timezone.Components = append(timezone.Components, e)
+	timezone.addComponent(e)
 	return e
 }
 
@@ -865,12 +1009,12 @@ func NewTimezone(tzId string) *VTimezone {
 
 func (cal *Calendar) AddTimezone(id string) *VTimezone {
 	e := NewTimezone(id)
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 	return e
 }
 
 func (cal *Calendar) AddVTimezone(e *VTimezone) {
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 }
 
 func (cal *Calendar) Timezones() []*VTimezone {
@@ -906,14 +1050,15 @@ func (c *VAlarm) SerializeTo(w io.Writer, serialConfig *SerializationConfigurati
 	return c.ComponentBase.serializeThis(w, ComponentVAlarm, serialConfig)
 }
 
-func NewAlarm(tzId string) *VAlarm {
-	// Todo How did this come about?
+// NewAlarm creates a new VALARM component.
+// Note: The string parameter is unused as VALARM components do not have a UID property per RFC 5545.
+func NewAlarm(_ string) *VAlarm {
 	e := &VAlarm{}
 	return e
 }
 
 func (cal *Calendar) AddVAlarm(e *VAlarm) {
-	cal.Components = append(cal.Components, e)
+	cal.addComponent(e)
 }
 
 func (cal *Calendar) Alarms() []*VAlarm {
@@ -1010,31 +1155,80 @@ func (general *GeneralComponent) SerializeTo(w io.Writer, serialConfig *Serializ
 }
 
 func GeneralParseComponent(cs *CalendarStream, startLine *BaseProperty) (Component, error) {
+	return generalParseComponentWithHandler(cs, startLine, parseProperty)
+}
+
+func GeneralParseComponentWithOptions(cs *CalendarStream, startLine *BaseProperty, opts ...any) (Component, error) {
+	if _, err := parseComponentOptions(opts...); err != nil {
+		return nil, err
+	}
+	if startLine == nil {
+		return nil, ErrNilStartLine
+	}
+	return generalParseComponentWithHandler(cs, startLine, opts...)
+}
+
+func generalParseComponentWithHandler(cs *CalendarStream, startLine *BaseProperty, opts ...any) (Component, error) {
 	var co Component
-	var err error
 	switch ComponentType(startLine.Value) {
 	case ComponentVCalendar:
-		return nil, errors.New("malformed calendar; vcalendar not where expected")
+		return nil, ErrVCalendarNotWhereExpected
 	case ComponentVEvent:
-		co, err = ParseVEventWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VEvent{ComponentBase: r}
 	case ComponentVTodo:
-		co, err = ParseVTodoWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VTodo{ComponentBase: r}
 	case ComponentVJournal:
-		co, err = ParseVJournalWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VJournal{ComponentBase: r}
 	case ComponentVFreeBusy:
-		co, err = ParseVBusyWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VBusy{ComponentBase: r}
 	case ComponentVTimezone:
-		co, err = ParseVTimezoneWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VTimezone{ComponentBase: r}
 	case ComponentVAlarm:
-		co, err = ParseVAlarmWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &VAlarm{ComponentBase: r}
 	case ComponentStandard:
-		co, err = ParseStandardWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &Standard{ComponentBase: r}
 	case ComponentDaylight:
-		co, err = ParseDaylightWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &Daylight{ComponentBase: r}
 	default:
-		co, err = ParseGeneralComponentWithError(cs, startLine)
+		r, rerr := parseComponentWithHandler(cs, startLine, opts...)
+		if rerr != nil {
+			return nil, rerr
+		}
+		co = &GeneralComponent{ComponentBase: r, Token: startLine.Value}
 	}
-	return co, err
+	return co, nil
 }
 
 func ParseVEvent(cs *CalendarStream, startLine *BaseProperty) *VEvent {
@@ -1183,13 +1377,71 @@ func ParseGeneralComponentWithError(cs *CalendarStream, startLine *BaseProperty)
 }
 
 func ParseComponent(cs *CalendarStream, startLine *BaseProperty) (ComponentBase, error) {
-	cb := ComponentBase{}
+	return parseComponentWithHandler(cs, startLine)
+}
+
+func ParseComponentWithOptions(cs *CalendarStream, startLine *BaseProperty, opts ...any) (ComponentBase, error) {
+	if _, err := parseComponentOptions(opts...); err != nil {
+		return ComponentBase{}, err
+	}
+	if startLine == nil {
+		return ComponentBase{}, ErrNilStartLine
+	}
+	return parseComponentWithHandler(cs, startLine, opts...)
+}
+
+type componentParseConfig struct {
+	propertyParser PropertyParser
+	timezoneMapper TimezoneMapper
+}
+
+func parseComponentOptions(opts ...any) (componentParseConfig, error) {
+	cfg := componentParseConfig{propertyParser: parseProperty}
+	for i, opt := range opts {
+		switch opt := opt.(type) {
+		case nil:
+			continue
+		case PropertyParser:
+			cfg.propertyParser = opt
+		case func(ContentLine) (*BaseProperty, error):
+			cfg.propertyParser = PropertyParser(opt)
+		case TimezoneMapper:
+			cfg.timezoneMapper = opt
+		case func(string) *time.Location:
+			cfg.timezoneMapper = TimezoneMapper(opt)
+		default:
+			return cfg, fmt.Errorf("%w %d: %T", ErrInvalidOpArg, i, opt)
+		}
+	}
+	return cfg, nil
+}
+
+// maxComponentNestingDepth bounds how deeply nested BEGIN/END components may be
+// before parsing is aborted. Nested components recurse through
+// parseComponentWithHandler, so without a limit an input consisting of many
+// repeated BEGIN lines drives unbounded recursion and crashes the program with a
+// fatal stack overflow. Real-world calendars nest only a few levels deep
+// (e.g. VCALENDAR > VEVENT > VALARM), so this limit is far above any legitimate use.
+const maxComponentNestingDepth = 1000
+
+func parseComponentWithHandler(cs *CalendarStream, startLine *BaseProperty, opts ...any) (ComponentBase, error) {
+	cfg, err := parseComponentOptions(opts...)
+	cb := ComponentBase{timezoneMapper: cfg.timezoneMapper}
+	if err != nil {
+		return cb, err
+	}
+	cs.depth++
+	defer func() { cs.depth-- }()
+	if cs.depth > maxComponentNestingDepth {
+		return cb, NewMalformedError(cs.line, -1, ErrComponentNestingTooDeep)
+	}
+	lastLine := 0
 	cont := true
-	for ln := 0; cont; ln++ {
-		l, err := cs.ReadLine()
+	for cont {
+		l, lineNo, err := cs.ReadLine()
 		if err != nil {
-			switch err {
-			case io.EOF:
+			switch {
+			case errors.Is(err, io.EOF):
 				cont = false
 			default:
 				return cb, err
@@ -1198,32 +1450,51 @@ func ParseComponent(cs *CalendarStream, startLine *BaseProperty) (ComponentBase,
 		if l == nil || len(*l) == 0 {
 			continue
 		}
-		line, err := ParseProperty(*l)
+		line, err := cfg.propertyParser(*l)
 		if err != nil {
-			return cb, fmt.Errorf("parsing component property %d: %w", ln, err)
+			if errors.Is(err, ErrPropertySkipped) {
+				continue
+			}
+			return cb, NewMalformedError(lineNo, -1, err)
 		}
 		if line == nil {
-			return cb, errors.New("parsing component line")
+			continue
 		}
+		lastLine = lineNo
 		switch line.IANAToken {
 		case "END":
 			switch line.Value {
 			case startLine.Value:
 				return cb, nil
 			default:
-				return cb, errors.New("unbalanced end")
+				return cb, NewMalformedError(lineNo, -1, ErrUnbalancedEnd)
 			}
 		case "BEGIN":
-			co, err := GeneralParseComponent(cs, line)
+			co, err := generalParseComponentWithHandler(cs, line, opts...)
 			if err != nil {
 				return cb, err
 			}
 			if co != nil {
 				cb.Components = append(cb.Components, co)
 			}
-		default: // TODO put in all the supported types for type switching etc.
+		case string(ComponentPropertyUniqueId), string(ComponentPropertyDtstamp), string(ComponentPropertyOrganizer),
+			string(ComponentPropertyAttendee), string(ComponentPropertyAttach), string(ComponentPropertyDescription),
+			string(ComponentPropertyCategories), string(ComponentPropertyClass), string(ComponentPropertyColor),
+			string(ComponentPropertyCreated), string(ComponentPropertySummary), string(ComponentPropertyDtStart),
+			string(ComponentPropertyDtEnd), string(ComponentPropertyLocation), string(ComponentPropertyStatus),
+			string(ComponentPropertyFreebusy), string(ComponentPropertyLastModified), string(ComponentPropertyUrl),
+			string(ComponentPropertyGeo), string(ComponentPropertyTransp), string(ComponentPropertySequence),
+			string(ComponentPropertyExdate), string(ComponentPropertyExrule), string(ComponentPropertyRdate),
+			string(ComponentPropertyRrule), string(ComponentPropertyAction), string(ComponentPropertyTrigger),
+			string(ComponentPropertyPriority), string(ComponentPropertyResources), string(ComponentPropertyCompleted),
+			string(ComponentPropertyDue), string(ComponentPropertyPercentComplete), string(ComponentPropertyTzid),
+			string(ComponentPropertyComment), string(ComponentPropertyRelatedTo), string(ComponentPropertyMethod),
+			string(ComponentPropertyRecurrenceId), string(ComponentPropertyDuration), string(ComponentPropertyContact),
+			string(ComponentPropertyRequestStatus):
+			cb.Properties = append(cb.Properties, IANAProperty{*line})
+		default:
 			cb.Properties = append(cb.Properties, IANAProperty{*line})
 		}
 	}
-	return cb, errors.New("ran out of lines")
+	return cb, NewMalformedError(lastLine, -1, ErrOutOfLines)
 }
